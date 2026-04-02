@@ -16,21 +16,30 @@ Session timing is handled automatically by hooks (SessionStart/SessionEnd). This
 
 ## State File
 
-`.timelog-state.json` in the project root (gitignored):
+`.timelog-state.json` in the project root (gitignored). Supports multiple concurrent sessions:
 
 ```json
 {
-  "active_session": {
-    "start": "2026-04-02T14:00:00",
-    "branch": "develop",
-    "task": null
+  "sessions": {
+    "session-id-abc": {
+      "start": "2026-04-02T14:00:00",
+      "branch": "develop",
+      "task": null,
+      "last_activity": "2026-04-02T14:35:00"
+    },
+    "session-id-def": {
+      "start": "2026-04-02T14:10:00",
+      "branch": "feature/auth",
+      "task": "Implementing login",
+      "last_activity": "2026-04-02T14:30:00"
+    }
   }
 }
 ```
 
 ## Updating the Task Description
 
-When the user mentions what they're working on (e.g., "I'm fixing the auth bug"), proactively update `.timelog-state.json` by setting `active_session.task` to a short description. This ensures the timelog entry has a meaningful task name when the session ends.
+When the user mentions what they're working on (e.g., "I'm fixing the auth bug"), proactively update `.timelog-state.json` by finding the current session in the `sessions` map and setting its `task` field to a short description. The current session ID is not directly available, but you can identify it as the session with the most recent `last_activity` or `start` timestamp. This ensures the timelog entry has a meaningful task name when the session ends.
 
 ## Timelog Format
 

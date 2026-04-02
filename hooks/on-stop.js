@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-// Time Tracker — Stop hook
-// Runs after every Claude response completes.
-// Updates last_activity timestamp in the state file so we know
-// when the user was last active — even if they Ctrl+C later.
+// Time Tracker — Stop hook (multi-session)
+// Updates last_activity for THIS session only.
 
 const fs = require("fs");
 const path = require("path");
+const { formatISO, readState, writeState } = require("./utils");
 
 // Read hook input from stdin
 let input = "";
@@ -18,28 +17,19 @@ try {
   hookData = JSON.parse(input);
 } catch {}
 
+const sessionId = hookData.session_id || "unknown";
 const projectDir = hookData.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const stateFile = path.join(projectDir, ".timelog-state.json");
 
-if (!fs.existsSync(stateFile)) {
+const state = readState(stateFile);
+if (!state.sessions) {
   process.exit(0);
 }
 
-try {
-  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-
-  if (state.active_session) {
-    const now = new Date();
-    state.active_session.last_activity =
-      now.getFullYear() + "-" +
-      String(now.getMonth() + 1).padStart(2, "0") + "-" +
-      String(now.getDate()).padStart(2, "0") + "T" +
-      String(now.getHours()).padStart(2, "0") + ":" +
-      String(now.getMinutes()).padStart(2, "0") + ":" +
-      String(now.getSeconds()).padStart(2, "0");
-
-    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\n");
-  }
-} catch {}
+const session = state.sessions[sessionId];
+if (session) {
+  session.last_activity = formatISO(new Date());
+  writeState(stateFile, state);
+}
 
 process.exit(0);
