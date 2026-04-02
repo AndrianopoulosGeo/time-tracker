@@ -22,5 +22,18 @@
         }
       ]
     }
+  ],
+  "Stop": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/on-stop.js\"",
+          "timeout": 5,
+          "async": true
+        }
+      ]
+    }
   ]
 }

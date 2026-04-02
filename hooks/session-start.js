@@ -48,16 +48,28 @@ try {
       const startDate = new Date(state.active_session.start);
       const oldBranch = state.active_session.branch || "unknown";
       const oldTask = state.active_session.task || null;
+      const lastActivity = state.active_session.last_activity
+        ? new Date(state.active_session.last_activity)
+        : null;
 
-      let diffMinutes = Math.floor((now - startDate) / 60000);
-      let endTime = nowTime;
-
-      // Cap at 2 hours if unreasonably long (> 12 hours)
-      if (diffMinutes > 720) {
-        diffMinutes = 120;
-        const cappedEnd = new Date(startDate.getTime() + 120 * 60000);
-        endTime = formatTime(cappedEnd);
+      // If we have last_activity, use it as the session end time.
+      // The session effectively ended when the last response completed.
+      // If no last_activity, fall back to now (capped at 2h for long gaps).
+      let sessionEnd;
+      if (lastActivity) {
+        sessionEnd = lastActivity;
+      } else {
+        sessionEnd = now;
+        // Cap at 2 hours from start if unreasonably long (> 12 hours)
+        const rawMinutes = Math.floor((now - startDate) / 60000);
+        if (rawMinutes > 720) {
+          sessionEnd = new Date(startDate.getTime() + 120 * 60000);
+        }
       }
+
+      let diffMinutes = Math.floor((sessionEnd - startDate) / 60000);
+      if (diffMinutes < 1) diffMinutes = 1;
+      let endTime = formatTime(sessionEnd);
 
       const hours = (diffMinutes / 60).toFixed(2);
       const startTime = formatTime(startDate);
