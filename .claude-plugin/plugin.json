@@ -1,0 +1,9 @@
+{
+  "name": "time-tracker",
+  "version": "1.0.0",
+  "description": "Automatic time tracking for Claude Code sessions. Logs session duration, branch, and task to a per-project timelog.",
+  "author": {
+    "name": "Andri",
+    "email": "local@localhost"
+  }
+}
