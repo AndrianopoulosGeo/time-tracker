@@ -5,7 +5,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, spawn } = require("child_process");
 const { formatISO, readState, writeState, closeSession } = require("./utils");
 
 // Read hook input from stdin
@@ -79,9 +79,31 @@ state.sessions[sessionId] = {
   branch: branch,
   task: null,
   last_activity: null,
+  watchdog_pid: null,
 };
 
 writeState(stateFile, state);
+
+// ── Spawn watchdog to monitor Claude process ────────────────────
+// The watchdog runs in the background and auto-closes this session
+// when the Claude process exits (Ctrl+C, crash, etc.)
+try {
+  const claudePid = process.ppid;
+  const watchdogScript = path.join(__dirname, "watchdog.js");
+  const watchdog = spawn("node", [watchdogScript, sessionId, projectDir, String(claudePid)], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  watchdog.unref();
+
+  // Store watchdog PID so SessionEnd can kill it
+  const updatedState = readState(stateFile);
+  if (updatedState.sessions && updatedState.sessions[sessionId]) {
+    updatedState.sessions[sessionId].watchdog_pid = watchdog.pid;
+    writeState(stateFile, updatedState);
+  }
+} catch {}
 
 // ── Ensure .gitignore includes state file ───────────────────────
 try {

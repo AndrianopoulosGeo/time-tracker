@@ -40,6 +40,13 @@ if (!session || !session.start) {
   process.exit(0);
 }
 
+// Kill the watchdog process (no longer needed for graceful exit)
+if (session.watchdog_pid) {
+  try {
+    process.kill(session.watchdog_pid);
+  } catch {} // Already dead, that's fine
+}
+
 // Close this session
 try {
   closeSession(session, timelogFile, projectDir, false);
