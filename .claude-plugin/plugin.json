@@ -1,7 +1,7 @@
 {
   "name": "time-tracker",
-  "version": "2.0.0",
-  "description": "Time tracking for Claude Code sessions via transcript scanning. Syncs session data to a per-project timelog on demand.",
+  "version": "3.0.0",
+  "description": "Time tracking for Claude Code sessions. Hybrid explicit timer + transcript scanning with activity-gap detection for accurate durations. Supports Excel export.",
   "author": {
     "name": "AndrianopoulosGeo",
     "email": "andrianopoulos.ge@gmail.com"

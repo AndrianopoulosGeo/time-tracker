@@ -4,7 +4,12 @@ description: "Scan Claude Code session transcripts and sync unrecorded sessions 
 
 # Timer Sync
 
-Scan all session transcripts for this project and write unrecorded sessions to `docs/timelog.md`.
+Scan all session transcripts for this project and write unrecorded sessions to `docs/timelog.md`. Uses activity-gap detection to ensure accurate durations.
+
+## Arguments
+
+- No arguments: sync only new (unrecorded) sessions
+- `--recompute`: re-process ALL recorded sessions with activity-gap detection and fix inflated entries
 
 ## Steps
 
@@ -12,32 +17,37 @@ Scan all session transcripts for this project and write unrecorded sessions to `
 
 2. **Read recorded sessions.** Read `.timelog-recorded.json` from the project root. If it doesn't exist, treat as `{"recorded_sessions": []}`.
 
-3. **List transcript files.** Use Bash to list all `*.jsonl` files directly in the transcript directory (not in subdirectories). Each filename (minus `.jsonl`) is a session UUID.
+3. **Read active timer state.** Read `.timelog-active.json` from the project root. If it has `"active": true`, note the `session_uuid` — this session will be skipped to prevent double-counting with the explicit timer.
 
-4. **Identify unrecorded sessions.** Filter out UUIDs already in `recorded_sessions`.
+4. **List transcript files.** Use Bash to list all `*.jsonl` files directly in the transcript directory (not in subdirectories). Each filename (minus `.jsonl`) is a session UUID.
 
-5. **Skip currently-active session.** Check each file's modification time. If modified within the last 60 seconds, skip it (it's the current session still being written). Use:
+5. **Identify sessions to process.**
+   - **Normal mode (no args):** Filter out UUIDs already in `recorded_sessions` and the active timer's `session_uuid`.
+   - **`--recompute` mode:** Process ALL sessions (including already-recorded ones). This is for fixing historical inflated entries.
+
+6. **Skip currently-active session.** Check each file's modification time. If modified within the last 60 seconds, skip it (it's the current session still being written). Use:
    ```bash
    find <transcript-dir> -maxdepth 1 -name "*.jsonl" -mmin +1
    ```
    This returns only files older than 1 minute.
 
-6. **First-run check.** If there are more than 5 unrecorded sessions, ask the user:
+7. **First-run check.** If there are more than 5 unrecorded sessions, ask the user:
    > "Found N unrecorded sessions going back to [earliest date]. Sync all, or only since a specific date?"
    
    If the user provides a date, filter accordingly. If they say "all", proceed with all.
 
-7. **Parse each unrecorded transcript.** For each file, run this Node.js command via Bash to extract a summary WITHOUT reading the file into your context:
+8. **Parse each transcript with activity-gap detection.** For each file, run this Node.js command via Bash to extract segments WITHOUT reading the file into your context:
 
    ```bash
    node -e "
    const fs = require('fs');
    const lines = fs.readFileSync(process.argv[1], 'utf8').trim().split('\n');
-   let first = null, last = null, prompt = null, branch = null, tokens = 0;
+   const THRESHOLD = 15 * 60 * 1000;
+   let timestamps = [], prompt = null, branch = null, tokens = 0;
    for (const line of lines) {
      try {
        const r = JSON.parse(line);
-       if (r.timestamp) { if (!first) first = r.timestamp; last = r.timestamp; }
+       if (r.timestamp) timestamps.push(r.timestamp);
        if (!branch && r.gitBranch) branch = r.gitBranch;
        if (!prompt && r.type === 'user' && r.message) {
          const c = r.message.content;
@@ -47,41 +57,68 @@ Scan all session transcripts for this project and write unrecorded sessions to `
        if (r.message?.usage) tokens += (r.message.usage.output_tokens || 0);
      } catch {}
    }
-   if (!first || !last) { console.log('null'); process.exit(0); }
-   const s = new Date(first), e = new Date(last);
-   const mins = Math.round((e - s) / 60000);
-   console.log(JSON.stringify({ first, last, prompt: prompt || 'Development session', branch: branch || 'unknown', tokens, minutes: mins }));
+   const segments = [];
+   if (timestamps.length >= 2) {
+     let segStart = new Date(timestamps[0]), segEnd = new Date(timestamps[0]);
+     for (let i = 1; i < timestamps.length; i++) {
+       const cur = new Date(timestamps[i]);
+       if (cur - segEnd <= THRESHOLD) { segEnd = cur; }
+       else {
+         const m = Math.round((segEnd - segStart) / 60000);
+         if (m >= 1) segments.push({ start: segStart.toISOString(), end: segEnd.toISOString(), minutes: m });
+         segStart = segEnd = cur;
+       }
+     }
+     const m = Math.round((segEnd - segStart) / 60000);
+     if (m >= 1) segments.push({ start: segStart.toISOString(), end: segEnd.toISOString(), minutes: m });
+   }
+   console.log(JSON.stringify({ segments, prompt: prompt || 'Development session', branch: branch || 'unknown', tokens }));
    " "<filepath>"
    ```
 
    You can batch multiple files in one Bash call to be efficient. Parse the JSON output.
 
-8. **Filter results.** Skip sessions where `minutes < 1` (too short — likely just plugin updates or `/clear` commands).
+9. **Filter results.** Skip segments where `minutes < 1`. Skip sessions that have zero valid segments.
 
-9. **Write to timelog.** For each valid session:
-   - Convert UTC timestamps to local time
-   - Compute: date (YYYY-MM-DD), start time (HH:MM), end time (HH:MM), hours (decimal, 2 places)
-   - Format token count: under 1000 → raw number, 1000+ → `X.Xk`
-   - Task description: `<first prompt> (<tokens>)` 
-   - Write the row to `docs/timelog.md` following the timelog format from the SKILL.md reference
-   - Create `docs/` directory and timelog file if they don't exist
+10. **Write to timelog.** For each valid segment:
+    - Convert UTC timestamps to local time
+    - Compute: date (YYYY-MM-DD), start time (HH:MM), end time (HH:MM), hours (decimal, 2 places)
+    - Format token count: under 1000 → raw number, 1000+ → `X.Xk`
+    - Task description: `<first prompt> (<tokens>)`
+    - Write the row to `docs/timelog.md` following the timelog format from the SKILL.md reference
+    - Create `docs/` directory and timelog file if they don't exist
+    - **Each segment gets its own row** under the correct date section. A session with segments across multiple days writes rows under each day.
 
-10. **Update recorded sessions.** Add all newly processed UUIDs to `.timelog-recorded.json`. Write the file.
+11. **`--recompute` mode extra steps.** When recomputing:
+    - Before writing, show the user a diff comparing old entries to new ones:
+      ```
+      Recompute results:
+        Session 37fab372: was 62.73h → now 2.57h (7 segments)
+        Session ffa50e38: was 23.55h → now 1.73h (5 segments)
+      ```
+    - Ask the user to confirm before overwriting
+    - Remove the old single-row entries and replace with the new segment-based rows
+    - Recalculate all affected Daily Totals
 
-11. **Update .gitignore.** Ensure `.timelog-recorded.json` is in `.gitignore`. If not, append it.
+12. **Update recorded sessions.** Add all newly processed UUIDs to `.timelog-recorded.json`. Write the file. (In `--recompute` mode, the UUIDs are already recorded — no change needed.)
 
-12. **Show summary to user:**
+13. **Update .gitignore.** Ensure both `.timelog-recorded.json` and `.timelog-active.json` are in `.gitignore`. If not, append them.
+
+14. **Show summary to user:**
 
 ```
-Synced N sessions:
+Synced N sessions (M segments):
 
-  2026-04-01: 2 sessions, 1.75h
-    08:14 – 08:44 | develop | Design time-tracker skill (4.5k tokens)
-    14:00 – 15:30 | develop | Implement auth module (12.0k tokens)
+  2026-04-01: 2 segments, 0.70h
+    19:45 – 20:15 | develop | Time tracker extension research (106.0k tokens)
+    20:40 – 20:52 | develop | Time tracker extension research (106.0k tokens)
 
-  2026-04-02: 1 session, 0.50h
-    09:29 – 09:59 | develop | Check backlog status (2.8k tokens)
+  2026-04-02: 3 segments, 1.32h
+    10:28 – 10:30 | develop | Time tracker extension research (106.0k tokens)
+    10:55 – 11:09 | develop | Time tracker extension research (106.0k tokens)
+    12:25 – 13:28 | develop | Time tracker extension research (106.0k tokens)
 
-Skipped: M sessions (< 1 min)
+Skipped: K sessions (no active segments)
 Current session excluded (still active)
+Active timer session excluded (tracked via /timer-start)
 ```

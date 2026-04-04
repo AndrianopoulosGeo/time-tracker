@@ -5,18 +5,47 @@ description: "Time tracking for Claude Code sessions. Use when the user mentions
 
 # Time Tracker
 
-Tracks time spent in Claude Code by scanning session transcript files. No hooks or background processes — everything is on-demand via commands.
+Tracks time spent in Claude Code via explicit timers and transcript scanning. Uses activity-gap detection to ensure accurate durations even when sessions are left open.
 
 ## How It Works
 
-Claude Code stores a complete transcript for every session as a JSONL file. This plugin reads those files to extract session timing, and writes the results to `docs/timelog.md`.
+Two tracking modes (hybrid):
+
+1. **Explicit timer** — User runs `/timer-start` and `/timer-stop` for precise control
+2. **Transcript scanning** — `/timer-sync` scans session JSONL files as a fallback for sessions without an explicit timer
+
+Both modes use **activity-gap detection**: instead of naive `last - first` duration, the plugin splits timestamps into active segments using a 15-minute idle threshold. Gaps longer than 15 minutes are excluded.
 
 **Available commands:**
+- `/timer-start` — Start an explicit work timer with a task description
+- `/timer-stop` — Stop the active timer and write the entry
 - `/timer-sync` — Scan transcripts, write unrecorded sessions to timelog
 - `/timer-add` — Add manual time entries (meetings, research, etc.)
-- `/timer` — Show today's total and unsynced session count
+- `/timer` — Show today's total, active timer status, and unsynced count
 - `/timer-report` — Show summaries by day, week, or custom range
 - `/timer-edit` — Fix or delete timelog entries
+- `/timer-export` — Export timelog to Excel (.xlsx)
+
+## Activity-Gap Detection Algorithm
+
+The core accuracy improvement in v3.0. Given a session's timestamps:
+
+1. Sort all timestamps chronologically
+2. Walk through them sequentially
+3. If the gap between consecutive timestamps is ≤ 15 minutes → same active segment
+4. If the gap > 15 minutes → end current segment, start a new one
+5. Drop segments shorter than 1 minute
+6. Sum segment durations = actual active time
+
+**Example:**
+```
+Timestamps: [10:00, 10:05, 10:12, 10:15, --- 8h gap ---, 18:20, 18:25]
+Segment 1: 10:00–10:15 (15 min)
+Segment 2: 18:20–18:25 (5 min)
+Active total: 20 min (NOT 8h 25min)
+```
+
+The algorithm lives in `hooks/utils.js` as `computeActiveSegments()`.
 
 ## Transcript Location
 
@@ -34,17 +63,18 @@ To compute the encoded path from the current working directory:
 
 ## Parsing a Transcript JSONL File
 
-Each line is a JSON object. To extract session data, use a Node.js script via Bash to avoid reading large files into context:
+Each line is a JSON object. To extract session data with activity-gap detection, use this Node.js script via Bash:
 
 ```bash
 node -e "
 const fs = require('fs');
 const lines = fs.readFileSync(process.argv[1], 'utf8').trim().split('\n');
-let first = null, last = null, prompt = null, branch = null, tokens = 0;
+const THRESHOLD = 15 * 60 * 1000;
+let timestamps = [], prompt = null, branch = null, tokens = 0;
 for (const line of lines) {
   try {
     const r = JSON.parse(line);
-    if (r.timestamp) { if (!first) first = r.timestamp; last = r.timestamp; }
+    if (r.timestamp) timestamps.push(r.timestamp);
     if (!branch && r.gitBranch) branch = r.gitBranch;
     if (!prompt && r.type === 'user' && r.message) {
       const c = r.message.content;
@@ -54,13 +84,65 @@ for (const line of lines) {
     if (r.message?.usage) tokens += (r.message.usage.output_tokens || 0);
   } catch {}
 }
-const s = new Date(first), e = new Date(last);
-const mins = Math.round((e - s) / 60000);
-console.log(JSON.stringify({ first, last, prompt: prompt || 'Development session', branch: branch || 'unknown', tokens, minutes: mins }));
+// Activity-gap segment detection
+const segments = [];
+if (timestamps.length >= 2) {
+  let segStart = new Date(timestamps[0]), segEnd = new Date(timestamps[0]);
+  for (let i = 1; i < timestamps.length; i++) {
+    const cur = new Date(timestamps[i]);
+    if (cur - segEnd <= THRESHOLD) { segEnd = cur; }
+    else {
+      const m = Math.round((segEnd - segStart) / 60000);
+      if (m >= 1) segments.push({ start: segStart.toISOString(), end: segEnd.toISOString(), minutes: m });
+      segStart = segEnd = cur;
+    }
+  }
+  const m = Math.round((segEnd - segStart) / 60000);
+  if (m >= 1) segments.push({ start: segStart.toISOString(), end: segEnd.toISOString(), minutes: m });
+}
+console.log(JSON.stringify({ segments, prompt: prompt || 'Development session', branch: branch || 'unknown', tokens }));
 " "$TRANSCRIPT_FILE"
 ```
 
-This outputs a single JSON line with all needed data. **Skip sessions where `minutes < 1`.**
+This outputs an array of active segments instead of a single first/last pair. **Skip segments where `minutes < 1`.**
+
+## State Files
+
+### `.timelog-active.json` — Explicit Timer State
+
+Located in the project root (gitignored). Tracks the currently running explicit timer:
+
+```json
+{
+  "active": true,
+  "task": "design the auth module",
+  "branch": "develop",
+  "started_at": "2026-04-04T10:30:00.000Z",
+  "started_at_local": "2026-04-04 13:30",
+  "session_uuid": "5915f31d-2302-40e5-9c70-fd4a362f59b4"
+}
+```
+
+When stopped or auto-closed:
+```json
+{
+  "active": false,
+  "last_task": "design the auth module",
+  "last_stopped_at": "2026-04-04T12:00:00.000Z",
+  "last_hours": 1.25,
+  "auto_closed": false
+}
+```
+
+### `.timelog-recorded.json` — Synced Sessions Tracking
+
+Located in the project root (gitignored). Tracks which session UUIDs have been written to the timelog:
+
+```json
+{
+  "recorded_sessions": ["uuid1", "uuid2", "uuid3"]
+}
+```
 
 ## Timelog Format
 
@@ -92,18 +174,22 @@ Output file: `docs/timelog.md`
 
 **When creating a new day section:** insert after the `# Time Log` header line (newest first).
 
-## Recorded Sessions Tracking
+**Multi-segment sessions:** Each active segment produces its own row. A session with 3 segments across 2 days writes 3 rows under the appropriate date sections.
 
-File: `.timelog-recorded.json` in project root (gitignored).
+## Orphan Detection (SessionStart Hook)
 
-```json
-{
-  "recorded_sessions": ["uuid1", "uuid2", "uuid3"]
-}
-```
+A SessionStart hook checks for stale `.timelog-active.json` entries when a new session begins. If an active timer is found from a previous session:
 
-This tracks which session UUIDs have already been written to the timelog. The `/timer-sync` command reads this to skip already-processed sessions.
+1. Reads the transcript for the orphaned session's UUID
+2. Computes actual active time using activity-gap detection
+3. Uses the last active timestamp as the end time
+4. Writes the corrected entry to `docs/timelog.md`
+5. Clears `.timelog-active.json`
+
+This ensures forgotten timers are always cleaned up automatically.
 
 ## Detecting the Current Active Session
 
 When running `/timer-sync`, skip the currently-active session (the one you're running in). To detect it: check each JSONL file's modification time. If it was modified within the last 60 seconds, it's likely still being written to — skip it.
+
+Also skip sessions whose UUID matches the `session_uuid` in `.timelog-active.json` (to prevent double-counting between explicit timer and transcript scanning).

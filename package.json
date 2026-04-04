@@ -1,0 +1,8 @@
+{
+  "name": "time-tracker",
+  "version": "3.0.0",
+  "private": true,
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
