@@ -19,14 +19,19 @@ The user may provide an argument to specify the range:
 1. **Read timelog:** Read `docs/timelog.md` from the project root.
 
 2. **If file doesn't exist or is empty:**
-   - Tell the user: "No time entries found. Start a session and use `/timer-stop` to log your first entry."
+   - Tell the user: "No time entries found. Run `/timer-sync` to import your sessions, or `/timer-add` to log manual time."
    - Exit.
 
-3. **Parse entries:** Extract all rows from the markdown tables. Each row has: Time, Hours, Branch, Action/Task, under a date heading (## YYYY-MM-DD).
+3. **Check for unsynced sessions:** Compute the transcript directory, compare JSONL file count against `.timelog-recorded.json`. If there are unsynced sessions, note:
+   ```
+   Note: N sessions not yet synced. Run /timer-sync first for complete data.
+   ```
 
-4. **Filter by range:** Keep only entries within the requested date range.
+4. **Parse entries:** Extract all rows from the markdown tables. Each row has: Time, Hours, Branch, Action/Task, under a date heading (## YYYY-MM-DD).
 
-5. **Generate summary:**
+5. **Filter by range:** Keep only entries within the requested date range.
+
+6. **Generate summary:**
 
 ```
 Time Report: <range description>
@@ -41,10 +46,4 @@ Total: X.XXh across N sessions
 Branch Breakdown:
   develop             — X.XXh (N sessions)
   feature/auth-module — X.XXh (N sessions)
-```
-
-6. **Include active session note:** If there's a currently running session (from `.timelog-state.json`), note it:
-
-```
-Note: Active session running since HH:MM (not yet included in totals)
 ```

@@ -1,9 +1,9 @@
 {
   "name": "time-tracker",
-  "version": "1.3.0",
-  "description": "Automatic time tracking for Claude Code sessions. Logs session duration, branch, and task to a per-project timelog.",
+  "version": "2.0.0",
+  "description": "Time tracking for Claude Code sessions via transcript scanning. Syncs session data to a per-project timelog on demand.",
   "author": {
-    "name": "Andri",
-    "email": "local@localhost"
+    "name": "AndrianopoulosGeo",
+    "email": "andrianopoulos.ge@gmail.com"
   }
 }
